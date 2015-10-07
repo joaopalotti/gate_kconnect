@@ -1,5 +1,5 @@
 /*
- *  BatchProcessApp.java
+ *  BatchProcessLog.java
  *
  *
  * Copyright (c) 2006, The University of Sheffield.
@@ -13,15 +13,19 @@
  *
  *  Ian Roberts, March 2006
  *
- *  $Id: BatchProcessApp.java,v 1.5 2006/06/11 19:17:57 ian Exp $
+ *  $Id: BatchProcessLog.java,v 1.5 2006/06/11 19:17:57 ian Exp $
  */
 
 import gate.Document;
+import gate.corpora.DocumentContentImpl;
+import gate.DocumentContent;
 import gate.Corpus;
 import gate.CorpusController;
 import gate.AnnotationSet;
+import gate.Annotation;
 import gate.Gate;
 import gate.Factory;
+import gate.FeatureMap;
 import gate.util.*;
 import gate.util.persistence.PersistenceManager;
 
@@ -32,9 +36,18 @@ import java.util.ArrayList;
 import java.util.Iterator;
 
 import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.FileOutputStream;
 import java.io.BufferedOutputStream;
 import java.io.OutputStreamWriter;
+import java.io.BufferedWriter;
+
+import com.opencsv.CSVReader;
+import com.opencsv.CSVWriter;
+import com.opencsv.CSVParser;
+import com.opencsv.CSVParserBuilder;
+import com.opencsv.CSVReaderBuilder;
 
 /**
  * This class ilustrates how to do simple batch processing with GATE.  It loads
@@ -49,7 +62,7 @@ import java.io.OutputStreamWriter;
  * To keep the example simple, we do not do any exception handling - any error
  * will cause the process to abort.
  */
-public class BatchProcessApp {
+public class BatchProcessLog {
 
     /** Index of the first non-option argument on the command line. */
     //private static int firstFile = 0;
@@ -69,8 +82,8 @@ public class BatchProcessApp {
      */
     private static String encoding = null;
     
-    private static String inputDir = null;
-    private static String outputDir = null;
+    private static String inputFile = null;
+    private static String outputFile = null;
 
     /**
      * The main entry point.  First we parse the command line options (see
@@ -89,90 +102,111 @@ public class BatchProcessApp {
         CorpusController application =
             (CorpusController)PersistenceManager.loadObjectFromFile(gappFile);
 
-        // Create a Corpus to use.  We recycle the same Corpus object for each
-        // iteration.  The string parameter to newCorpus() is simply the
-        // GATE-internal name to use for the corpus.  It has no particular
-        // significance.
-
-        ArrayList<String> files = getFilesFromDir(inputDir);
-        gate.Corpus corpus = createCorpus(files);
-        //Corpus corpus = Factory.newCorpus("BatchProcessApp Corpus");
+        Corpus corpus = Factory.newCorpus("BatchProcessLog Corpus");
         application.setCorpus(corpus);
 
-        System.out.println("Processing " + files.size() + " files");
+        CSVParser parser = new CSVParserBuilder().withSeparator(',').withEscapeChar('\\').withQuoteChar('\"').withIgnoreLeadingWhiteSpace(false).withStrictQuotes(true).withIgnoreQuotations(false).build();  
+        final CSVReader reader = new CSVReaderBuilder(new FileReader(inputFile)).withSkipLines(0).withCSVParser(parser).build();
+        
+        CSVWriter writer = new CSVWriter(new FileWriter(outputFile), ',', '"', '\\' );
 
-        // process the files one by one
-        for(int i = 0; i < files.size(); i++) {
+        String [] nextLine;
 
-            // load the document (using the specified encoding if one was given)
-            File docFile = new File(files.get(i));
-            System.out.print("Processing document " + docFile + " ("+ i + ") ...");
-            Document doc = Factory.newDocument(docFile.toURL(), encoding);
+        while ((nextLine = reader.readNext()) != null) {
+            if(nextLine.length == 6){
+                String query = nextLine[2];
 
-            // put the document in the corpus
-            corpus.add(doc);
+                // Creates a temporary file and writes the query there
+                File temp = File.createTempFile("_gate_", ".tmp");
+                BufferedWriter bw = new BufferedWriter(new FileWriter(temp));
+                bw.write(query);
+                bw.close();
 
-            // run the application
-            application.execute();
+                Document doc = Factory.newDocument(temp.toURL(), encoding);
 
-            // remove the document from the corpus again
-            corpus.clear();
+                // remove the document from the corpus again
+                corpus.clear();
+                
+                // put the document in the corpus
+                corpus.add(doc);
 
-            String docXMLString = null;
-            // if we want to just write out specific annotation types, we must
-            // extract the annotations into a Set
-            if(annotTypesToWrite != null) {
-                // Create a temporary Set to hold the annotations we wish to write out
-                Set annotationsToWrite = new HashSet();
+                // run the application
+                application.execute();
 
-                // we only extract annotations from the default (unnamed) AnnotationSet
-                // in this example
-                AnnotationSet defaultAnnots = doc.getAnnotations("Output");
-                Iterator annotTypesIt = annotTypesToWrite.iterator();
-                while(annotTypesIt.hasNext()) {
-                    // extract all the annotations of each requested type and add them to
-                    // the temporary set
-                    AnnotationSet annotsOfThisType = defaultAnnots.get((String)annotTypesIt.next());
-                    if(annotsOfThisType != null) {
-                        annotationsToWrite.addAll(annotsOfThisType);
+                System.out.println("Query: " + query);
+                System.out.println("Writing file " + temp.getName());
+
+                // Set temporary file to be deleted
+                temp.deleteOnExit();
+
+
+                String docXMLString = "";
+                // if we want to just write out specific annotation types, we must
+                // extract the annotations into a Set
+                if(annotTypesToWrite != null) {
+                    // Create a temporary Set to hold the annotations we wish to write out
+                    Set annotationsToWrite = new HashSet();
+
+                    // we only extract annotations from the default (unnamed) AnnotationSet
+                    // in this example
+                    AnnotationSet defaultAnnots = doc.getAnnotations("Output");
+                    Iterator annotTypesIt = annotTypesToWrite.iterator();
+                    while(annotTypesIt.hasNext()) {
+                        // extract all the annotations of each requested type and add them to
+                        // the temporary set
+                        AnnotationSet annotsOfThisType = defaultAnnots.get((String)annotTypesIt.next());
+                        if(annotsOfThisType != null) {
+                            annotationsToWrite.addAll(annotsOfThisType);
+                        }
                     }
+
+                    // create the XML string using these annotations
+                    //System.out.println(doc.getNamedAnnotationSets());
+                    //System.out.println(doc.getAnnotationSetNames()); //[Output]
+                    //System.out.println(annotationsToWrite);
+                    
+                    Iterator annot = annotationsToWrite.iterator();
+                    while(annot.hasNext()){
+                        Annotation s = (Annotation) annot.next();
+                        FeatureMap fm = s.getFeatures();
+                        
+                        DocumentContentImpl dc = (DocumentContentImpl) doc.getContent();
+                        String annotatedPart = ((DocumentContentImpl) dc.getContent(s.getStartNode().getOffset(),
+                                    s.getEndNode().getOffset())).getOriginalContent();
+                        String type = s.getType();
+                        String cui = (String) fm.get("cui");
+                        String tui = (String) fm.get("tui");
+                        
+                        //System.out.println("Content: " + annotatedPart);
+                        //System.out.println("Type: " + s.getType() );
+                        //System.out.println("CUI: " + fm.get("cui") );
+                        //System.out.println("TUI: " + fm.get("tui") );
+                        
+                        docXMLString = docXMLString + annotatedPart + "|" + s.getType() + ";" + fm.get("cui") + ";" + fm.get("tui") + "$";
+                    }
+                    //docXMLString = doc.toXml(annotationsToWrite, true);
+                }
+                // otherwise, just write out the whole document as GateXML
+                else {
+                    docXMLString = doc.toXml();
                 }
 
-                // create the XML string using these annotations
-                docXMLString = doc.toXml(annotationsToWrite, true);
+                // Release the document, as it is no longer needed
+                Factory.deleteResource(doc);
+
+                String [] toWrite = new String[nextLine.length + 1];
+                int field = 0;
+                for(; field < nextLine.length; field++)
+                    toWrite[field] = nextLine[field];
+                
+                toWrite[field] = docXMLString;
+                writer.writeNext(toWrite);
             }
-            // otherwise, just write out the whole document as GateXML
-            else {
-                docXMLString = doc.toXml();
-            }
+        } // for each line of query log
 
-            // Release the document, as it is no longer needed
-            Factory.deleteResource(doc);
-
-            // output the XML to <inputFile>.out.xml
-            System.out.println("Writing file " + docFile.getName());
-            String outputFileName = docFile.getName() + ".out.xml";
-            //File outputFile = new File(docFile.getParentFile(), outputFileName);
-            File outputFile = new File(new File(outputDir).getAbsolutePath(), outputFileName);
-
-            // Write output files using the same encoding as the original
-            FileOutputStream fos = new FileOutputStream(outputFile);
-            BufferedOutputStream bos = new BufferedOutputStream(fos);
-            OutputStreamWriter out;
-            if(encoding == null) {
-                out = new OutputStreamWriter(bos);
-            }
-            else {
-                out = new OutputStreamWriter(bos, encoding);
-            }
-
-            out.write(docXMLString);
-
-            out.close();
-            System.out.println("done");
-        } // for each file
-
+        writer.close();
         System.out.println("All done");
+    
     } // void main(String[] args)
 
 
@@ -202,12 +236,12 @@ public class BatchProcessApp {
 
                 // -i dir = dir where the input files should be
                 case 'i':
-                    inputDir = args[++i];
+                    inputFile = args[++i];
                     break;
 
                 // -o dir = dir where the output files will be
                 case 'o':
-                    outputDir = args[++i];
+                    outputFile = args[++i];
                     break;
 
                 default:
@@ -227,50 +261,13 @@ public class BatchProcessApp {
         }
     }
 
-    private static ArrayList<String> getFilesFromDir(String dir){
-        File folder = new File(dir);
-        File[] listOfFiles = folder.listFiles();
-        ArrayList<String> files = new ArrayList<String>();
-   
-        for (int i = 0; i < listOfFiles.length; i++) {
-            if (listOfFiles[i].isFile()) {
-                System.out.println("File " + listOfFiles[i].getAbsolutePath());
-                files.add(listOfFiles[i].getAbsolutePath());
-            } else if (listOfFiles[i].isDirectory()) {
-                System.out.println("Directory " + listOfFiles[i].getAbsolutePath());
-            }
-        }
-        return files;
-    }
-
-    private static gate.Corpus createCorpus(ArrayList<String> files) throws GateException {
-
-        gate.Corpus corpus = Factory.newCorpus("MyCorpus");
-        /*
-        for(String file: files){
-            System.out.print("\t " + file);
-            try {
-                corpus.add(Factory.newDocument(new File(file).toURL()));
-                System.out.println(" -- success");
-            }
-            catch(gate.creole.ResourceInstantiationException e) {
-                System.out.println(" -- failed (" + e.getMessage() + ")");
-            }
-            catch(Exception e) {
-                System.out.println(" -- " + e.getMessage());
-            }
-        }
-        */
-        return corpus;
-    }
-
     /**
      * Print a usage message and exit.
      */
     private static final void usage() {
         System.err.println(
                 "Usage:\n" +
-                "   java sheffield.examples.BatchProcessApp -g <gappFile> [-e encoding]\n" +
+                "   java sheffield.examples.BatchProcessLog -g <gappFile> [-e encoding]\n" +
                 "            [-a annotType] [-a annotType] file1 file2 ... fileN\n" +
                 "\n" +
                 "-g gappFile : (required) the path to the saved application state we are\n" +
@@ -288,8 +285,8 @@ public class BatchProcessApp {
                 "              GATE GUI.  If no -a option is given the whole of each\n" +
                 "              processed document will be output as GateXML (the equivalent\n" +
                 "              of \"save as XML\").\n" +
-                "-i LogFile    : (required) reads this query log file as input\n" +
-                "-o output     : (required) outputs the processeed log into this file"
+                "-i filename : (required) reads this log file\n" +
+                "-o filename : (required) outputs a processeed file with this name"
                 );
 
         System.exit(1);
